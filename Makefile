@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra
-LIBS = -lreadline
+LIBS = -lreadline -lm
 
 UNAME_S := $(shell uname -s)
 
@@ -17,8 +17,8 @@ all: lisp
 debug: CFLAGS += -g -DDEBUG
 debug: lisp
 
-lisp: interpreter.c
-	$(CC) $(CFLAGS) $(LDFLAGS) interpreter.c -o interpreter $(LIBS)
+lisp: interpreter.c mpc.c mpc.h
+	$(CC) $(CFLAGS) $(LDFLAGS) interpreter.c mpc.c -o interpreter $(LIBS)
 
 clean:
 	rm -f interpreter
