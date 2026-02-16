@@ -34,37 +34,39 @@
 int main(int argc, char** argv) {
 
     mpc_parser_t* Number   = mpc_new("number");
+    mpc_parser_t* Float    = mpc_new("float");
     mpc_parser_t* Operator = mpc_new("operator");
     mpc_parser_t* Expr     = mpc_new("expr");
     mpc_parser_t* TinyLisp = mpc_new("tinylisp");
 
     //Defining Polish Notation grammar. 
     mpca_lang(MPCA_LANG_DEFAULT,
-    "                                                     \
-        number   : /-?[0-9]+/ ;                             \
-        operator : '+' | '-' | '*' | '/' ;                  \
-        expr     : <number> | '(' <operator> <expr>+ ')' ;  \
-        tinylisp : /^/ <operator> <expr>+ /$/ ;             \
+    "                                                                     \
+        number   : /-?[0-9]+/ ;                                            \
+        float    : /-?[0-9]+[.][0-9]+/ ;                                   \
+        operator : '+' | '-' | '*' | '/' | '%';                            \
+        expr     : <float> | <number> | '(' <operator> <expr>+ ')' ;       \
+        tinylisp : /^/ <operator> <expr>+ /$/ ;                            \
     ",
-    Number, Operator, Expr, TinyLisp);
+    Number, Float, Operator, Expr, TinyLisp);
    
-    // Printing Version and Exit Information. 
-    puts("TinyLisp Version 0.0.0.0.1");
+    // Printing version and exit information. 
+    puts("TinyLisp Version 0.0.0.0.2");
     puts("Press Ctrl+c to Exit\n");
    
     while (1) {
     
-        char* input = readline("tinylisp> "); //Output prompt and get input. 
+        char* input = readline("tinylisp> "); //Outputing prompt and getting input. 
         
-        add_history(input); //Add input to history. 
+        add_history(input); //Adding input to history. 
         
         mpc_result_t r;
-        if (mpc_parse("<stdin>", input, TinyLisp, &r)) { //Attempt to Parse the user Input
+        if (mpc_parse("<stdin>", input, TinyLisp, &r)) { //Attempting to parse the user input. 
             //If succsessful, print the AST
             mpc_ast_print(r.output);
             mpc_ast_delete(r.output);
         } else {
-            //Otherwise print the error
+            //Otherwise printing the error. 
             mpc_err_print(r.error);
             mpc_err_delete(r.error);
         } 
