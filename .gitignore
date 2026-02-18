@@ -56,3 +56,5 @@ dkms.conf
 
 # mpc library files
 mpc.*
+
+.DS_Store
