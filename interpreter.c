@@ -48,27 +48,41 @@ typedef struct lval {
     union {
         long num;
         double dnum;
-        err_t err;
+        char* err;
         char* sym;
     };
-    
+
+    int count;
+    struct lval** cell;
 } lval_t;
 
-lval_t* eval(mpc_ast_t* t);
+lval_t* lval_eval_sexpr(lval_t* v);
+lval_t* lval_eval(lval_t* v);
 lval_t *lval_num(long x);
 lval_t *lval_float(double x);
+lval_t* lval_err(char* err);
+lval_t* lval_sym(char* s);
+lval_t* lval_sexpr(void);
 void lval_del(lval_t* v);
-lval_t* eval_op(lval_t* x, char *op, lval_t* y);
+lval_t* builtin_op(lval_t* a, char *op);
 void lval_print(lval_t* res);
 void lval_println(lval_t* res);
-lval_t* lval_err(err_t ERROR_TYPE);
+lval_t* lval_read_num(mpc_ast_t* t);
+lval_t* lval_read_float(mpc_ast_t* t);
+lval_t* lval_read(mpc_ast_t* t);
+lval_t* lval_add(lval_t* v, lval_t* x);
+lval_t* lval_pop(lval_t* v, int i);
+lval_t* lval_take(lval_t* v, int i);
+void lval_expr_print(lval_t* v, char open, char close);
+long ipow(long base, int exp);
 
 int main(int argc, char** argv) {
 
     //Telling parser what it can parse. 
     mpc_parser_t* Number   = mpc_new("number");
     mpc_parser_t* Float    = mpc_new("float");
-    mpc_parser_t* Operator = mpc_new("operator");
+    mpc_parser_t* Symbol   = mpc_new("symbol");
+    mpc_parser_t* Sexpr    = mpc_new("sexpr");
     mpc_parser_t* Expr     = mpc_new("expr");
     mpc_parser_t* TinyLisp = mpc_new("tinylisp");
 
@@ -77,16 +91,17 @@ int main(int argc, char** argv) {
     "                                                                     \
         number   : /-?[0-9]+/ ;                                            \
         float    : /-?[0-9]+[.][0-9]+/ ;                                   \
-        operator : '+' | '-' | '*' | '/' | '%' | '^' | \"min\" | \"max\" ;                            \
-        expr     : <float> | <number> | '(' <operator> <expr>+ ')' ;       \
-        tinylisp : /^/ <operator> <expr>+ /$/ ;                            \
+        symbol   : '+' | '-' | '*' | '/' | '%' | '^' | \"min\" | \"max\" ; \
+        sexpr    : '(' <expr>* ')' ;                                       \
+        expr     : <float> | <number> | <symbol> | <sexpr> ;               \
+        tinylisp : /^/ <expr>* /$/ ;                                       \
     ",
-    Number, Float, Operator, Expr, TinyLisp);
-   
+    Number, Float, Symbol, Sexpr, Expr, TinyLisp);
+    
     // Printing version and exit information. 
-    puts("TinyLisp Version 0.0.0.0.4");
+    puts("TinyLisp Version 0.0.0.0.5");
     puts("Press Ctrl+C to Exit\n");
-   
+    
     while (1) {
     
         char* input = readline("tinylisp> "); //Outputing prompt and getting input. 
@@ -96,9 +111,10 @@ int main(int argc, char** argv) {
         mpc_result_t r;
         if (mpc_parse("<stdin>", input, TinyLisp, &r)) { //Attempting to parse the user input. 
             //If succsessful, print the AST
-            lval_t* result = eval(r.output);
+            lval_t* result = lval_eval(lval_read(r.output));
             lval_println(result);
             lval_del(result);
+            //mpc_ast_print(r.output);
             mpc_ast_delete(r.output);
         } else {
             //Otherwise printing the error and deleting result. 
@@ -110,47 +126,127 @@ int main(int argc, char** argv) {
     
     }
 
-    mpc_cleanup(5, Number, Float, Operator, Expr, TinyLisp); // Undefining and deleting parsers   
+    mpc_cleanup(6, Number, Float, Symbol, Sexpr, Expr, TinyLisp); //Undefining and deleting parsers   
   
     return 0;
 }
 
+lval_t* lval_eval_sexpr(lval_t* v) {
+
+    //Evaluate Children. 
+    for (int i = 0; i < v->count; i++) {
+        v->cell[i] = lval_eval(v->cell[i]);
+    }
+
+    //Error Checking. 
+    for (int i = 0; i < v->count; i++) {
+        if (v->cell[i]->type == LVAL_ERR) { return lval_take(v, i); }
+    }
+
+    //Empty Expression. 
+    if (v->count == 0) { return v; }
+
+    //Single Expression. 
+    if (v->count == 1) { return lval_take(v, 0); }
+
+    //Ensure First Element is Symbol. 
+    lval_t* f = lval_pop(v, 0);
+    if (f->type != LVAL_SYM) {
+        lval_del(f); lval_del(v);
+        return lval_err("S-expression Does not start with symbol!");
+    }
+
+    //Call builtin with operator. 
+    lval_t* result = builtin_op(v, f->sym);
+    lval_del(f);
+    return result;
+}
+
 /**
  * @brief
- * This function evaluates the input from user. It recursively iterates through AST and returns pointer to the result of all operations.
+ * This function evaluates the input from user. It recursively iterates through S-expression and returns pointer to the result of all operations.
 */
 
-lval_t* eval(mpc_ast_t* t) {
+lval_t* lval_eval(lval_t* v) {
+    /* Evaluate Sexpressions */
+    if (v->type == LVAL_SEXPR) { return lval_eval_sexpr(v); }
+    /* All other lval types remain the same */
+    LOG("V val: %ld", v->num);
+    return v;
+}
 
-    lval_t* x;
-    double temp_f;
-    long temp_l;
+/**
+ * @details
+ * This function finds a result of S-expression with one operation and one or more operands
+ * If one of the operands is double type, it makes double result. Some of double opeartions aren't same to long, that's why there are two branches for each case. 
+ * Otherwise the result of operation is long type. 
+ * The function creates structure of result and returns pointer to it, freeing memory of every operand before. 
+*/
 
-    //If tagged as number of float, return it directly.
-    if (strstr(t->tag, "number")) {
-        errno = 0;
-        temp_l = strtol(t->contents, NULL, 10);
-        return (errno != ERANGE) ? lval_num(temp_l) : lval_err(LERR_BAD_NUM);
-    }
-    if (strstr(t->tag, "float")) {
-        errno = 0;
-        temp_f = strtof(t->contents, NULL);
-        return (errno != ERANGE) ? lval_float(temp_f) : lval_err(LERR_BAD_NUM);
-    }
+lval_t* builtin_op(lval_t* a, char* op) {
 
-    //The operator is always second child.
-    char* op = t->children[1]->contents;
-
-    //Storing the third child in x
-    x = eval(t->children[2]);
-
-    //Iterating the remaining children and combining.
-    int i = 3;
-    while (strstr(t->children[i]->tag, "expr")) {
-        x = eval_op(x, op, eval(t->children[i]));
-        i++;
+    //Ensuring all arguments are numbers or floats. 
+    for (int i = 0; i < a->count; i++) {
+        if ((a->cell[i]->type != LVAL_NUM) && (a->cell[i]->type != LVAL_FLOAT)) {
+            lval_del(a);
+            return lval_err("Cannot operate on non-number!");
+        }
     }
 
+    //Popping the first element. 
+    lval_t* x = lval_pop(a, 0);
+
+    //If no arguments and sub then perform unary negation. 
+    if ((strcmp(op, "-") == 0) && a->count == 0) {
+        LOG("X type: %d", x->type);
+        switch (x->type) {
+            case LVAL_NUM: 
+                x->num = -x->num; 
+                break;
+            case LVAL_FLOAT: 
+                x->dnum = -x->dnum; 
+                break;
+        }
+    }
+
+    //While there are still elements remaining. 
+    while (a->count > 0) {
+
+        //Pop the next element
+        lval_t* y = lval_pop(a, 0);
+
+        if (((x->type == LVAL_FLOAT) && (y->type == LVAL_NUM)) || ((x->type == LVAL_NUM) && (y->type == LVAL_FLOAT)) || ((x->type == LVAL_FLOAT) && (y->type == LVAL_FLOAT))) { //If one of operands is double. 
+            double op1 = (x->type == LVAL_FLOAT) ? x->dnum : (double)x->num;
+            double op2 = (y->type == LVAL_FLOAT) ? y->dnum : (double)y->num;
+            if (strcmp(op, "+") == 0) { x->dnum = op1 + op2;} //Adding. 
+            else if (strcmp(op, "-") == 0) { x->dnum = op1 - op2; } //Subtracting. 
+            else if (strcmp(op, "*") == 0) { x->dnum = op1 * op2; } //Multiplying. 
+            else if (strcmp(op, "/") == 0) { x->dnum = op1 / op2; } //Dividing. 
+            else if (strcmp(op, "%") == 0) { x->dnum = fmod(op1, op2); } //Dividing by module. 
+            else if (strcmp(op, "^") == 0) { x->dnum = pow(op1, op2); } //Raising to a power. 
+            else if (strcmp(op, "min") == 0) { x->dnum = (op1 > op2) ? op2 : op1; } //Finding minimum of two operands. 
+            else if (strcmp(op, "max") == 0) { x->dnum = (op1 > op2) ? op1 : op2; } //Finding maximum of two operands. 
+        } else if ((x->type == LVAL_NUM) && (y->type == LVAL_NUM)) { //Otherwise (two operands are long type) all same steps but specifically for long types.
+            if (strcmp(op, "+") == 0) { x->num = x->num + y->num; } 
+            else if (strcmp(op, "-") == 0) { x->num = x->num - y->num; }
+            else if (strcmp(op, "*") == 0) { x->num = x->num * y->num; }
+            else if (strcmp(op, "/") == 0) { 
+                if (y->num == 0){
+                    lval_del(x); lval_del(y);
+                    x = lval_err("Division By Zero!"); break;
+                }
+                x->num /= y->num;
+            }
+            else if (strcmp(op, "%") == 0) { x->num = (x->num % y->num); }
+            else if (strcmp(op, "^") == 0) { x->num = ipow(x->num, y->num); }
+            else if (strcmp(op, "min") == 0) { x->num = (x->num > y->num) ? y->num : x->num; }
+            else if (strcmp(op, "max") == 0) { x->num = (x->num > y->num) ? x->num : y->num; }
+        }
+
+        lval_del(y);
+    }
+
+    lval_del(a); 
     return x;
 }
 
@@ -169,85 +265,45 @@ long ipow(long base, int exp) {
 }
 
 /**
- * @details
- * This function finds a result of expression with one operation and two operands
- * If one of the operands is double type, it makes double result. Some of double opeartions aren't same to long, that's why there are two branches for each case. 
- * Otherwise the result of operation is long type. 
- * The function creates structure of result and returns pointer to it, freeing memory of two operands before. 
-*/
-lval_t* eval_op(lval_t* x, char *op, lval_t* y) {
-    lval_t* result = NULL;
-    if (((x->type == LVAL_FLOAT) && (y->type == LVAL_NUM)) || ((x->type == LVAL_NUM) && (y->type == LVAL_FLOAT)) || ((x->type == LVAL_FLOAT) && (y->type == LVAL_FLOAT))) { //If one of operands is double. 
-        double op1 = (x->type == LVAL_FLOAT) ? x->dnum : (double)x->num;
-        double op2 = (y->type == LVAL_FLOAT) ? y->dnum : (double)y->num;
-        //Freeing memory of operands. 
-        lval_del(x);
-        lval_del(y);
-        if (strcmp(op, "+") == 0) { result = lval_float(op1 + op2);} //Adding. 
-        else if (strcmp(op, "-") == 0) { result = lval_float(op1 - op2); } //Subtracting. 
-        else if (strcmp(op, "*") == 0) { result = lval_float(op1 * op2); } //Multiplying. 
-        else if (strcmp(op, "/") == 0) { result = lval_float(op1 / op2); } //Dividing. 
-        else if (strcmp(op, "%") == 0) { result = lval_float(fmod(op1, op2)); } //Dividing by module. 
-        else if (strcmp(op, "^") == 0) { result = lval_float(pow(op1, op2)); } //Raising to a power. 
-        else if (strcmp(op, "min") == 0) { result = lval_float((op1 > op2) ? op2 : op1); } //Finding minimum of two operands. 
-        else if (strcmp(op, "max") == 0) { result = lval_float((op1 > op2) ? op1 : y->dnum); } //Finding maximum of two operands. 
-    } else if ((x->type == LVAL_NUM) && (y->type == LVAL_NUM)) { //Otherwise (two operands are long type) all same steps but specifically for long types.
-        long op1 = x->num;
-        long op2 = y->num;
-        //Freeing memory of operands. 
-        lval_del(x);
-        lval_del(y);
-        if (strcmp(op, "+") == 0) { result = lval_num(op1 + op2); } 
-        else if (strcmp(op, "-") == 0) { result = lval_num(op1 - op2); }
-        else if (strcmp(op, "*") == 0) { result = lval_num(op1 * op2); }
-        else if (strcmp(op, "/") == 0) { result = (op2 == 0) ? lval_err(LERR_DIV_ZERO) : lval_num(op1 / op2);}
-        else if (strcmp(op, "%") == 0) { result = lval_num((op1 % op2)); }
-        else if (strcmp(op, "^") == 0) { result = lval_num(ipow(op1, op2)); }
-        else if (strcmp(op, "min") == 0) { result = lval_num((op1 > op2) ? op2 : op1); }
-        else if (strcmp(op, "max") == 0) { result = lval_num((op1 > op2) ? op1 : op2); }
-    } else if (x->type == LVAL_ERR) {
-        result = x;
-        lval_del(y); //Freeing memory of operands. 
-    } else if (y->type == LVAL_ERR) {
-        result = y;
-        lval_del(x); //Freeing memory of operands. 
-    }
-    return (result == NULL) ? lval_err(LERR_BAD_OP) : result;
-}
-
-/**
  * @brief
  * This function prints result of expression depending on type of result - double or long.
 */
-void lval_print(lval_t* v) {
-  switch (v->type) {
-    //In the case the type is a number print it. 
-    //Then 'break' out of the switch.
-    case LVAL_NUM: printf("%li", v->num); break;
-
-    case LVAL_FLOAT: printf("%f", v->dnum); break;
-
-    //In the case the type is an error. 
-    case LVAL_ERR:
-      //Checking what type of error it is and print it. 
-      if (v->err == LERR_DIV_ZERO) {
-        printf("Error: Division By Zero!");
-      }
-      if (v->err == LERR_BAD_OP)   {
-        printf("Error: Invalid Operator!");
-      }
-      if (v->err == LERR_BAD_NUM)  {
-        printf("Error: Invalid Number!");
-      }
-    break;
+void lval_print(lval_t* res) {
+  switch (res->type) {
+    case LVAL_NUM:   printf("%ld", res->num); break;
+    case LVAL_FLOAT: printf("%f", res->dnum); break;
+    case LVAL_ERR:   printf("Error: %s", res->err); break;
+    case LVAL_SYM:   printf("%s", res->sym); break;
+    case LVAL_SEXPR: lval_expr_print(res, '(', ')'); break;
   }
 }
 
 //This function prints an lval followed by a newline
-void lval_println(lval_t* v) { lval_print(v); putchar('\n'); }
+void lval_println(lval_t* res) { lval_print(res); putchar('\n'); }
 
 //This function frees memory of given operand
 void lval_del(lval_t* v) {
+
+    switch (v->type) {
+        //Doing nothing for number or float types. 
+        case LVAL_NUM: break;
+        case LVAL_FLOAT: break;
+
+        //For Err or Sym freeing the string data.
+        case LVAL_ERR: free(v->err); break;
+        case LVAL_SYM: free(v->sym); break;
+
+        //If Sexpr then delete all elements inside.
+        case LVAL_SEXPR:
+            for (int i = 0; i < v->count; i++) {
+                lval_del(v->cell[i]);
+            }
+            //Freeing the memory allocated to contain the pointers. 
+            free(v->cell);
+            break;
+    }
+
+    //Freeing the memory allocated for the lval_t struct itself. 
     free(v);
 }
 
@@ -268,9 +324,115 @@ lval_t* lval_float(double x) {
 }
 
 //This function creates structure based on input error. 
-lval_t* lval_err(err_t ERROR_TYPE) {
-    lval_t* v = (lval_t *)malloc(sizeof(lval_t));
-    v->type = LVAL_ERR;
-    v->err = ERROR_TYPE;
+lval_t* lval_err(char* err) {
+  lval_t* v = malloc(sizeof(lval_t));
+  v->type = LVAL_ERR;
+  v->err = malloc(strlen(err) + 1);
+  strcpy(v->err, err);
+  return v;
+}
+
+//This function creates structure of parsed symbol. 
+lval_t* lval_sym(char* s) {
+  lval_t* v = malloc(sizeof(lval_t));
+  v->type = LVAL_SYM;
+  v->sym = malloc(strlen(s) + 1);
+  strcpy(v->sym, s);
+  return v;
+}
+
+//This function creates structure of S-expression. 
+lval_t* lval_sexpr(void) {
+  lval_t* v = malloc(sizeof(lval_t));
+  v->type = LVAL_SEXPR;
+  v->count = 0;
+  v->cell = NULL;
+  return v;
+}
+
+//This function parses number from AST. 
+lval_t* lval_read_num(mpc_ast_t* t) {
+  errno = 0;
+  long x = strtol(t->contents, NULL, 10);
+  return errno != ERANGE ?
+    lval_num(x) : lval_err("invalid number");
+}
+
+//This function parses float number from AST. 
+lval_t* lval_read_float(mpc_ast_t* t) {
+  errno = 0;
+  double x = strtof(t->contents, NULL);
+  return errno != ERANGE ?
+    lval_float(x) : lval_err("invalid number");
+}
+
+//This function parses AST into Lisp S-expression.
+lval_t* lval_read(mpc_ast_t* t) {
+
+    //If Symbol or Number returning conversion to that type. 
+    if (strstr(t->tag, "number")) { return lval_read_num(t); }
+    if (strstr(t->tag, "float")) { return lval_read_float(t); }
+    if (strstr(t->tag, "symbol")) { return lval_sym(t->contents); }
+
+    //If root (>) or sexpr then creating empty list. 
+    lval_t* x = NULL;
+    if (strcmp(t->tag, ">") == 0) { x = lval_sexpr(); }
+    if (strstr(t->tag, "sexpr"))  { x = lval_sexpr(); }
+
+    //Filling this list with any valid expression contained within. 
+    for (int i = 0; i < t->children_num; i++) {
+        if (strcmp(t->children[i]->contents, "(") == 0) { continue; }
+        if (strcmp(t->children[i]->contents, ")") == 0) { continue; }
+        if (strcmp(t->children[i]->tag,  "regex") == 0) { continue; }
+        x = lval_add(x, lval_read(t->children[i]));
+    }
+
+    return x;
+}
+
+//This function adds element to an array of numbers or expressions. It increases count variable, allocates more memory and adds new element.
+lval_t* lval_add(lval_t* v, lval_t* x) {
+    v->count++;
+    v->cell = realloc(v->cell, sizeof(lval_t*) * v->count);
+    v->cell[v->count-1] = x;
     return v;
+}
+
+void lval_expr_print(lval_t* v, char open, char close) {
+    putchar(open);
+    for (int i = 0; i < v->count; i++) {
+
+        /* Print Value contained within */
+        lval_print(v->cell[i]);
+
+        /* Don't print trailing space if last element */
+        if (i != (v->count-1)) {
+        putchar(' ');
+        }
+    }
+    putchar(close);
+}
+
+//This function pops elements from S-expression array and shifts all elements backwards.
+lval_t* lval_pop(lval_t* v, int i) {
+    //Finding the item at i. 
+    lval_t* x = v->cell[i];
+
+    //Shifting memory after the item at "i" over the top. 
+    memmove(&v->cell[i], &v->cell[i+1],
+        sizeof(lval_t*) * (v->count-i-1));
+
+    //Decrease the count of items in the list. 
+    v->count--;
+
+    //Reallocate the memory used. 
+    v->cell = realloc(v->cell, sizeof(lval_t*) * v->count);
+    return x;
+}
+
+//This function takes element from S-expression array and returns pointer to it.
+lval_t* lval_take(lval_t* v, int i) {
+    lval_t* x = lval_pop(v, i);
+    lval_del(v);
+    return x;
 }
