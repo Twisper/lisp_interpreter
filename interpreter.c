@@ -110,7 +110,7 @@ int main(int argc, char** argv) {
     
     }
 
-    mpc_cleanup(4, Number, Operator, Expr, TinyLisp); // Undefining and deleting parsers   
+    mpc_cleanup(5, Number, Float, Operator, Expr, TinyLisp); // Undefining and deleting parsers   
   
     return 0;
 }
@@ -135,7 +135,7 @@ lval_t* eval(mpc_ast_t* t) {
     if (strstr(t->tag, "float")) {
         errno = 0;
         temp_f = strtof(t->contents, NULL);
-        return (errno != ERANGE) ? lval_num(temp_f) : lval_err(LERR_BAD_NUM);
+        return (errno != ERANGE) ? lval_float(temp_f) : lval_err(LERR_BAD_NUM);
     }
 
     //The operator is always second child.
@@ -177,7 +177,7 @@ long ipow(long base, int exp) {
 */
 lval_t* eval_op(lval_t* x, char *op, lval_t* y) {
     lval_t* result = NULL;
-    if (((x->type == LVAL_FLOAT) && (y->type == LVAL_NUM)) || ((x->type == LVAL_NUM) && (y->type == LVAL_FLOAT))) { //If one of operands is double. 
+    if (((x->type == LVAL_FLOAT) && (y->type == LVAL_NUM)) || ((x->type == LVAL_NUM) && (y->type == LVAL_FLOAT)) || ((x->type == LVAL_FLOAT) && (y->type == LVAL_FLOAT))) { //If one of operands is double. 
         double op1 = (x->type == LVAL_FLOAT) ? x->dnum : (double)x->num;
         double op2 = (y->type == LVAL_FLOAT) ? y->dnum : (double)y->num;
         //Freeing memory of operands. 
