@@ -32,7 +32,10 @@
     #define LOG(fmt, ...)
 #endif
 
-typedef enum var_types {LVAL_NUM, LVAL_FLOAT, LVAL_ERR, LVAL_SYM, LVAL_SEXPR} var_t; //Enum for different operand types. 
+#define LASSERT(args, cond, err) \
+  if (!(cond)) { lval_del(args); return lval_err(err); }
+
+typedef enum var_types {LVAL_NUM, LVAL_FLOAT, LVAL_ERR, LVAL_SYM, LVAL_SEXPR, LVAL_QEXPR} var_t; //Enum for different operand types. 
 
 typedef enum err_types {LERR_DIV_ZERO, LERR_BAD_OP, LERR_BAD_NUM} err_t;
 
@@ -63,16 +66,30 @@ lval_t *lval_float(double x);
 lval_t* lval_err(char* err);
 lval_t* lval_sym(char* s);
 lval_t* lval_sexpr(void);
-void lval_del(lval_t* v);
+lval_t* lval_qexpr(void);
+lval_t* builtin(lval_t* a, char* func);
 lval_t* builtin_op(lval_t* a, char *op);
+lval_t* builtin_head(lval_t* a);
+lval_t* builtin_tail(lval_t* a);
+lval_t* builtin_list(lval_t* a);
+lval_t* builtin_eval(lval_t* a);
+lval_t* builtin_join(lval_t* a);
+lval_t* builtin_cons(lval_t* a);
+lval_t* builtin_len(lval_t* a);
+lval_t* builtin_init(lval_t* a);
+lval_t* lval_join(lval_t* x, lval_t* y);
+
 void lval_print(lval_t* res);
 void lval_println(lval_t* res);
+void lval_del(lval_t* v);
+
 lval_t* lval_read_num(mpc_ast_t* t);
 lval_t* lval_read_float(mpc_ast_t* t);
 lval_t* lval_read(mpc_ast_t* t);
 lval_t* lval_add(lval_t* v, lval_t* x);
 lval_t* lval_pop(lval_t* v, int i);
 lval_t* lval_take(lval_t* v, int i);
+
 void lval_expr_print(lval_t* v, char open, char close);
 long ipow(long base, int exp);
 
@@ -83,23 +100,27 @@ int main(int argc, char** argv) {
     mpc_parser_t* Float    = mpc_new("float");
     mpc_parser_t* Symbol   = mpc_new("symbol");
     mpc_parser_t* Sexpr    = mpc_new("sexpr");
+    mpc_parser_t* Qexpr    = mpc_new("qexpr");
     mpc_parser_t* Expr     = mpc_new("expr");
     mpc_parser_t* TinyLisp = mpc_new("tinylisp");
 
-    //Defining Polish Notation grammar. 
+    //Defining Lisp grammar. 
     mpca_lang(MPCA_LANG_DEFAULT,
     "                                                                     \
         number   : /-?[0-9]+/ ;                                            \
-        float    : /-?[0-9]+[.][0-9]+/ ;                                   \
-        symbol   : '+' | '-' | '*' | '/' | '%' | '^' | \"min\" | \"max\" ; \
-        sexpr    : '(' <expr>* ')' ;                                       \
-        expr     : <float> | <number> | <symbol> | <sexpr> ;               \
-        tinylisp : /^/ <expr>* /$/ ;                                       \
+        float    : /-?[0-9]+[.][0-9]+/ ;                                    \
+        symbol   : \"list\" | \"head\" | \"tail\" | \"join\" | \"eval\" |    \
+        \"cons\" | \"len\" | \"init\" | \"min\" | \"max\" |                   \
+        '+' | '-' | '*' | '/' | '%' | '^' ;                                    \
+        sexpr    : '(' <expr>* ')' ;                                            \
+        qexpr  : '{' <expr>* '}' ;                                               \
+        expr     : <float> | <number> | <symbol> | <sexpr> | <qexpr> ;            \
+        tinylisp : /^/ <expr>* /$/ ;                                               \
     ",
-    Number, Float, Symbol, Sexpr, Expr, TinyLisp);
+    Number, Float, Symbol, Sexpr, Qexpr, Expr, TinyLisp);
     
-    // Printing version and exit information. 
-    puts("TinyLisp Version 0.0.0.0.5");
+    //Printing version and exit information. 
+    puts("TinyLisp Version 0.0.0.0.6");
     puts("Press Ctrl+C to Exit\n");
     
     while (1) {
@@ -126,7 +147,7 @@ int main(int argc, char** argv) {
     
     }
 
-    mpc_cleanup(6, Number, Float, Symbol, Sexpr, Expr, TinyLisp); //Undefining and deleting parsers   
+    mpc_cleanup(7, Number, Float, Symbol, Sexpr, Qexpr, Expr, TinyLisp); //Undefining and deleting parsers   
   
     return 0;
 }
@@ -157,9 +178,26 @@ lval_t* lval_eval_sexpr(lval_t* v) {
     }
 
     //Call builtin with operator. 
-    lval_t* result = builtin_op(v, f->sym);
+    lval_t* result = builtin(v, f->sym);
     lval_del(f);
     return result;
+}
+
+//This function choses right operation based on operator.
+lval_t* builtin(lval_t* a, char* func) {
+  if (strcmp("list", func) == 0) { return builtin_list(a); }
+  if (strcmp("head", func) == 0) { return builtin_head(a); }
+  if (strcmp("tail", func) == 0) { return builtin_tail(a); }
+  if (strcmp("join", func) == 0) { return builtin_join(a); }
+  if (strcmp("eval", func) == 0) { return builtin_eval(a); }
+  if (strcmp("cons", func) == 0) { return builtin_cons(a); }
+  if (strcmp("len", func) == 0) { return builtin_len(a); }
+  if (strcmp("init", func) == 0) { return builtin_init(a); }
+  if (strcmp("min", func) == 0) { return builtin_op(a, func); }
+  if (strcmp("max", func) == 0) { return builtin_op(a, func); }
+  if (strstr("+-/*%^", func)) { return builtin_op(a, func); }
+  lval_del(a);
+  return lval_err("Unknown Function!");
 }
 
 /**
@@ -168,10 +206,9 @@ lval_t* lval_eval_sexpr(lval_t* v) {
 */
 
 lval_t* lval_eval(lval_t* v) {
-    /* Evaluate Sexpressions */
+    //Evaluate S-expressions
     if (v->type == LVAL_SEXPR) { return lval_eval_sexpr(v); }
-    /* All other lval types remain the same */
-    LOG("V val: %ld", v->num);
+    //All other lval types remain the same
     return v;
 }
 
@@ -275,6 +312,7 @@ void lval_print(lval_t* res) {
     case LVAL_ERR:   printf("Error: %s", res->err); break;
     case LVAL_SYM:   printf("%s", res->sym); break;
     case LVAL_SEXPR: lval_expr_print(res, '(', ')'); break;
+    case LVAL_QEXPR: lval_expr_print(res, '{', '}'); break;
   }
 }
 
@@ -294,6 +332,7 @@ void lval_del(lval_t* v) {
         case LVAL_SYM: free(v->sym); break;
 
         //If Sexpr then delete all elements inside.
+        case LVAL_QEXPR:
         case LVAL_SEXPR:
             for (int i = 0; i < v->count; i++) {
                 lval_del(v->cell[i]);
@@ -350,6 +389,15 @@ lval_t* lval_sexpr(void) {
   return v;
 }
 
+//This function creates structure of S-expression. 
+lval_t* lval_qexpr(void) {
+  lval_t* v = malloc(sizeof(lval_t));
+  v->type = LVAL_QEXPR;
+  v->count = 0;
+  v->cell = NULL;
+  return v;
+}
+
 //This function parses number from AST. 
 lval_t* lval_read_num(mpc_ast_t* t) {
   errno = 0;
@@ -378,11 +426,14 @@ lval_t* lval_read(mpc_ast_t* t) {
     lval_t* x = NULL;
     if (strcmp(t->tag, ">") == 0) { x = lval_sexpr(); }
     if (strstr(t->tag, "sexpr"))  { x = lval_sexpr(); }
+    if (strstr(t->tag, "qexpr"))  { x = lval_qexpr(); }
 
     //Filling this list with any valid expression contained within. 
     for (int i = 0; i < t->children_num; i++) {
         if (strcmp(t->children[i]->contents, "(") == 0) { continue; }
         if (strcmp(t->children[i]->contents, ")") == 0) { continue; }
+        if (strcmp(t->children[i]->contents, "}") == 0) { continue; }
+        if (strcmp(t->children[i]->contents, "{") == 0) { continue; }
         if (strcmp(t->children[i]->tag,  "regex") == 0) { continue; }
         x = lval_add(x, lval_read(t->children[i]));
     }
@@ -402,10 +453,10 @@ void lval_expr_print(lval_t* v, char open, char close) {
     putchar(open);
     for (int i = 0; i < v->count; i++) {
 
-        /* Print Value contained within */
+        //Print Value contained within. 
         lval_print(v->cell[i]);
 
-        /* Don't print trailing space if last element */
+        //Don't print trailing space if last element. 
         if (i != (v->count-1)) {
         putchar(' ');
         }
@@ -435,4 +486,129 @@ lval_t* lval_take(lval_t* v, int i) {
     lval_t* x = lval_pop(v, i);
     lval_del(v);
     return x;
+}
+
+//This function evaluates head builtin command for Q-expressions. 
+lval_t* builtin_head(lval_t* a) {
+    LASSERT(a, a->count == 1,
+        "Function 'head' passed too many arguments!");
+    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+        "Function 'head' passed incorrect type!");
+    LASSERT(a, a->cell[0]->count != 0,
+        "Function 'head' passed {}!");
+
+    lval_t* v = lval_take(a, 0);
+    while (v->count > 1) { lval_del(lval_pop(v, 1)); }
+    return v;
+}
+
+//This function evaluates tail builtin command for Q-expressions. 
+lval_t* builtin_tail(lval_t* a) {
+    LASSERT(a, a->count == 1,
+        "Function 'tail' passed too many arguments!");
+    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+        "Function 'tail' passed incorrect type!");
+    LASSERT(a, a->cell[0]->count != 0,
+        "Function 'tail' passed {}!");
+
+    lval_t* v = lval_take(a, 0);
+    lval_del(lval_pop(v, 0));
+    return v;
+}
+
+//This function transforms S-expression into Q-expression.
+lval_t* builtin_list(lval_t* a) {
+  a->type = LVAL_QEXPR;
+  return a;
+}
+
+//This function evaluates expression in Q-expression. 
+lval_t* builtin_eval(lval_t* a) {
+    LASSERT(a, a->count == 1,
+        "Function 'eval' passed too many arguments!");
+    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+        "Function 'eval' passed incorrect type!");
+
+    lval_t* x = lval_take(a, 0);
+    x->type = LVAL_SEXPR;
+    return lval_eval(x);
+}
+
+//This function evaluates transforms multiple Q-expressions into one.
+lval_t* builtin_join(lval_t* a) {
+
+  for (int i = 0; i < a->count; i++) {
+    LASSERT(a, a->cell[i]->type == LVAL_QEXPR,
+      "Function 'join' passed incorrect type.");
+  }
+
+  lval_t* x = lval_pop(a, 0);
+
+  while (a->count) {
+    x = lval_join(x, lval_pop(a, 0));
+  }
+
+  lval_del(a);
+  return x;
+}
+
+//This function helps builtin_join function to concatenate two Q-expressions into one.
+lval_t* lval_join(lval_t* x, lval_t* y) {
+
+  //For each cell in y add it to x
+  while (y->count) {
+    x = lval_add(x, lval_pop(y, 0));
+  }
+
+  //Delete the empty y and return x. 
+  lval_del(y);
+  return x;
+}
+
+//This function returns Q-expression without last element.
+lval_t* builtin_init(lval_t* a) {
+    LASSERT(a, a->count == 1,
+        "Function 'init' passed too many arguments!");
+    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+        "Function 'init' passed incorrect type!");
+    LASSERT(a, a->cell[0]->count != 0,
+        "Function 'init' passed {}!");
+
+    lval_t* v = lval_take(a, 0);
+    lval_del(lval_pop(v, a->count-1));
+    return v;
+}
+
+//This function returns length of Q-expression.
+lval_t* builtin_len(lval_t* a) {
+    LASSERT(a, a->count == 1,
+        "Function 'len' passed too many arguments!");
+    LASSERT(a, a->cell[0]->type == LVAL_QEXPR,
+        "Function 'len' passed incorrect type!");
+    LASSERT(a, a->cell[0]->count != 0,
+        "Function 'len' passed {}!");
+
+    lval_t* v = lval_num(lval_take(a, 0)->count);
+    return v;
+}
+
+//This function adds one element to the beginning of Q-expression.
+lval_t* builtin_cons(lval_t* a) {
+    LASSERT(a, a->count == 2,
+        "Function 'cons' passed wrong number of arguments!");
+        
+    LASSERT(a, a->cell[1]->type == LVAL_QEXPR,
+        "Function 'cons' passed incorrect type for second argument!");
+
+    lval_t* val = lval_pop(a, 0);
+    
+    lval_t* qexpr = lval_take(a, 0);
+
+    qexpr->count++;
+    
+    qexpr->cell = realloc(qexpr->cell, sizeof(lval_t*) * qexpr->count);
+    memmove(&qexpr->cell[1], &qexpr->cell[0], sizeof(lval_t*) * (qexpr->count - 1));
+    qexpr->cell[0] = val;
+
+    return qexpr;
 }
