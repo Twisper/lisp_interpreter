@@ -104,6 +104,7 @@ lval_t* lval_qexpr(void);
 lval_t* lval_fun(lbuiltin func);
 lval_t* lval_lambda(lval_t* formals, lval_t* body);
 lval_t* lval_call(lenv_t* e, lval_t* f, lval_t* a);
+int lval_eq(lval_t* x, lval_t* y);
 
 lval_t* builtin_add(lenv_t* e, lval_t* a);
 lval_t* builtin_sub(lenv_t* e, lval_t* a);
@@ -114,6 +115,16 @@ lval_t* builtin_mod(lenv_t* e, lval_t* a);
 lval_t* builtin_min(lenv_t* e, lval_t* a);
 lval_t* builtin_max(lenv_t* e, lval_t* a);
 lval_t* builtin_lambda(lenv_t* e, lval_t* a);
+
+lval_t* builtin_gt(lenv_t* e, lval_t* a);
+lval_t* builtin_lt(lenv_t* e, lval_t* a);
+lval_t* builtin_ge(lenv_t* e, lval_t* a);
+lval_t* builtin_le(lenv_t* e, lval_t* a);
+lval_t* builtin_ord(lenv_t* e, lval_t* a, char* op);
+lval_t* builtin_cmp(lenv_t* e, lval_t* a, char* op);
+lval_t* builtin_eq(lenv_t* e, lval_t* a);
+lval_t* builtin_ne(lenv_t* e, lval_t* a);
+lval_t* builtin_if(lenv_t* e, lval_t* a);
 
 lval_t* builtin_op(lenv_t* e, lval_t* a, char* op);
 lval_t* builtin_head(lenv_t* e, lval_t* a);
@@ -181,7 +192,7 @@ int main(int argc, char** argv) {
     Number, Float, Symbol, Sexpr, Qexpr, Expr, TinyLisp);
     
     //Printing version and exit information. 
-    puts("TinyLisp Version 0.0.0.0.8");
+    puts("TinyLisp Version 0.0.0.0.9");
     puts("Press Ctrl+C to Exit\n");
 
     lenv_t* e = lenv_new();
@@ -872,6 +883,15 @@ void lenv_add_builtins(lenv_t* e) {
     lenv_add_builtin(e, "^", builtin_pow);
     lenv_add_builtin(e, "min", builtin_min);
     lenv_add_builtin(e, "max", builtin_max);
+
+    /* Comparison Functions */
+    lenv_add_builtin(e, "if", builtin_if);
+    lenv_add_builtin(e, "==", builtin_eq);
+    lenv_add_builtin(e, "!=", builtin_ne);
+    lenv_add_builtin(e, ">",  builtin_gt);
+    lenv_add_builtin(e, "<",  builtin_lt);
+    lenv_add_builtin(e, ">=", builtin_ge);
+    lenv_add_builtin(e, "<=", builtin_le);
 }
 
 lval_t* lval_lambda(lval_t* formals, lval_t* body) {
@@ -1063,4 +1083,122 @@ char* ltype_name(int t) {
     case LVAL_QEXPR: return "Q-Expression";
     default: return "Unknown";
   }
+}
+
+lval_t* builtin_gt(lenv_t* e, lval_t* a) {
+    return builtin_ord(e, a, ">");
+}
+lval_t* builtin_lt(lenv_t* e, lval_t* a) {
+    return builtin_ord(e, a, "<");
+}
+lval_t* builtin_ge(lenv_t* e, lval_t* a) {
+    return builtin_ord(e, a, ">=");
+}
+lval_t* builtin_le(lenv_t* e, lval_t* a) {
+    return builtin_ord(e, a, "<=");
+}
+
+lval_t* builtin_ord(lenv_t* e, lval_t* a, char* op) {
+    LASSERT_NUM(op, a, 2);
+    LASSERT_TYPE(op, a, 0, LVAL_NUM);
+    LASSERT_TYPE(op, a, 1, LVAL_NUM);
+
+    int r;
+    if (strcmp(op, ">")  == 0) {
+        r = (a->cell[0]->num >  a->cell[1]->num);
+    }
+    if (strcmp(op, "<")  == 0) {
+        r = (a->cell[0]->num <  a->cell[1]->num);
+    }
+    if (strcmp(op, ">=") == 0) {
+        r = (a->cell[0]->num >= a->cell[1]->num);
+    }
+    if (strcmp(op, "<=") == 0) {
+        r = (a->cell[0]->num <= a->cell[1]->num);
+    }
+    lval_del(a);
+    return lval_num(r);
+}
+
+int lval_eq(lval_t* x, lval_t* y) {
+
+    /* Different Types are always unequal */
+    if (x->type != y->type) { return 0; }
+
+    /* Compare Based upon type */
+    switch (x->type) {
+        /* Compare Number Value */
+        case LVAL_NUM: return (x->num == y->num);
+
+        /* Compare String Values */
+        case LVAL_ERR: return (strcmp(x->err, y->err) == 0);
+        case LVAL_SYM: return (strcmp(x->sym, y->sym) == 0);
+
+        /* If builtin compare, otherwise compare formals and body */
+        case LVAL_FUN:
+        if (x->builtin || y->builtin) {
+            return x->builtin == y->builtin;
+        } else {
+            return lval_eq(x->formals, y->formals)
+            && lval_eq(x->body, y->body);
+        }
+
+        /* If list compare every individual element */
+        case LVAL_QEXPR:
+        case LVAL_SEXPR:
+        if (x->count != y->count) { return 0; }
+        for (int i = 0; i < x->count; i++) {
+            /* If any element not equal then whole list not equal */
+            if (!lval_eq(x->cell[i], y->cell[i])) { return 0; }
+        }
+        /* Otherwise lists must be equal */
+        return 1;
+        break;
+    }
+    return 0;
+}
+
+lval_t* builtin_cmp(lenv_t* e, lval_t* a, char* op) {
+    LASSERT_NUM(op, a, 2);
+    int r;
+    if (strcmp(op, "==") == 0) {
+        r =  lval_eq(a->cell[0], a->cell[1]);
+    }
+    if (strcmp(op, "!=") == 0) {
+        r = !lval_eq(a->cell[0], a->cell[1]);
+    }
+    lval_del(a);
+    return lval_num(r);
+}
+
+lval_t* builtin_eq(lenv_t* e, lval_t* a) {
+    return builtin_cmp(e, a, "==");
+}
+
+lval_t* builtin_ne(lenv_t* e, lval_t* a) {
+    return builtin_cmp(e, a, "!=");
+}
+
+lval_t* builtin_if(lenv_t* e, lval_t* a) {
+    LASSERT_NUM("if", a, 3);
+    LASSERT_TYPE("if", a, 0, LVAL_NUM);
+    LASSERT_TYPE("if", a, 1, LVAL_QEXPR);
+    LASSERT_TYPE("if", a, 2, LVAL_QEXPR);
+
+    /* Mark Both Expressions as evaluable */
+    lval_t* x;
+    a->cell[1]->type = LVAL_SEXPR;
+    a->cell[2]->type = LVAL_SEXPR;
+
+    if (a->cell[0]->num) {
+        /* If condition is true evaluate first expression */
+        x = lval_eval(e, lval_pop(a, 1));
+    } else {
+        /* Otherwise evaluate second expression */
+        x = lval_eval(e, lval_pop(a, 2));
+    }
+
+    /* Delete argument list and return */
+    lval_del(a);
+    return x;
 }
